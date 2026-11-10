@@ -1,0 +1,11 @@
+<RCC>
+    <qresource prefix="/">
+        <file alias="Main.qml">Main.qml</file>
+        <file alias="MonitorTile.qml">MonitorTile.qml</file>
+        <file alias="DisplayRow.qml">DisplayRow.qml</file>
+        <file alias="ActionButton.qml">ActionButton.qml</file>
+        <file alias="RotateGlyph.qml">RotateGlyph.qml</file>
+        <file alias="IdentifyOverlay.qml">IdentifyOverlay.qml</file>
+        <file alias="i18n/en.json">i18n/en.json</file>
+    </qresource>
+</RCC>

@@ -1,0 +1,24 @@
+# Build output (bin/build, bin/test)
+/build/
+
+# makepkg output
+/pkgbuild/pkg/
+/pkgbuild/src/
+*.pkg.tar.*
+
+# qmake run in the source tree
+Makefile
+.qmake.stash
+*.o
+moc_*
+qrc_*.cpp
+/oma-hypr-screens
+/tests/oma-hypr-screens_tests
+
+# Editors and IDEs
+*.pro.user
+*.pro.user.*
+.vscode/
+.idea/
+*.swp
+*~
