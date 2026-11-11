@@ -6,6 +6,7 @@
 #include <QJsonObject>
 #include <QRegularExpression>
 #include <algorithm>
+#include <climits>
 #include <cmath>
 #include <optional>
 
@@ -29,7 +30,9 @@ Resolution resolution(const Monitor &m) {
 }
 
 QSize size(const Monitor &m) {
-    const auto r = resolution(m);
+    auto r = resolution(m);
+    if (r.w <= 0 || r.h <= 0)
+        r = {1920, 1080, 60};   // nothing known: a nominal size, never written
     const double scale = m.scale > 0 ? m.scale : 1;
     const int w = int(std::lround(r.w / scale)), h = int(std::lround(r.h / scale));
     return m.transform % 2 ? QSize(h, w) : QSize(w, h);
@@ -84,6 +87,30 @@ int indexOf(const Monitors &mons, const QString &name) {
     return -1;
 }
 
+int enabledCount(const Monitors &mons) {
+    int n = 0;
+    for (const auto &m : mons)
+        n += m.enabled;
+    return n;
+}
+
+QString selector(const Monitors &mons, const Monitor &m) {
+    const QString d = m.hyprDescription.trimmed();
+    if (d.isEmpty() || d.contains('"') || d.contains('\\'))
+        return m.name;
+    for (const auto &o : mons)
+        if (o.name != m.name && o.hyprDescription.trimmed() == d)
+            return m.name;
+    return "desc:" + d;
+}
+
+QStringList selectors(const Monitors &mons) {
+    QStringList out;
+    for (const auto &m : mons)
+        out << selector(mons, m);
+    return out;
+}
+
 static bool intersects(const Box &a, const Box &b) {
     return a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
 }
@@ -97,7 +124,7 @@ QSet<QString> overlaps(const Monitors &mons) {
     QSet<QString> bad;
     for (int i = 0; i < mons.size(); ++i)
         for (int j = i + 1; j < mons.size(); ++j)
-            if (intersects(box(mons[i]), box(mons[j]))) {
+            if (mons[i].enabled && mons[j].enabled && intersects(box(mons[i]), box(mons[j]))) {
                 bad << mons[i].name;
                 bad << mons[j].name;
             }
@@ -107,12 +134,14 @@ QSet<QString> overlaps(const Monitors &mons) {
 // Names in canvas order, so reattaching them is deterministic.
 static QStringList isolatedNames(const Monitors &mons) {
     QStringList out;
-    if (mons.size() < 2)
+    if (enabledCount(mons) < 2)
         return out;
     for (int i = 0; i < mons.size(); ++i) {
+        if (!mons[i].enabled)
+            continue;
         bool linked = false;
         for (int j = 0; j < mons.size() && !linked; ++j)
-            if (i != j) {
+            if (i != j && mons[j].enabled) {
                 const Box a = box(mons[i]), b = box(mons[j]);
                 linked = touches(a, b) || intersects(a, b);
             }
@@ -127,11 +156,14 @@ QSet<QString> isolated(const Monitors &mons) {
     return QSet<QString>(names.begin(), names.end());
 }
 
+// Turned-off displays move along, so they come back where they were.
 void normalize(Monitors &mons) {
-    if (mons.isEmpty())
+    if (!enabledCount(mons))
         return;
-    int mx = mons[0].x, my = mons[0].y;
+    int mx = INT_MAX, my = INT_MAX;
     for (const auto &m : mons) {
+        if (!m.enabled)
+            continue;
         mx = std::min(mx, m.x);
         my = std::min(my, m.y);
     }
@@ -176,13 +208,13 @@ Snap snap(const Box &r, const QList<Box> &others, double threshold) {
 // A display dropped where it touches nobody is pulled to the nearest one,
 // sharing at least 100 px of edge, so Hyprland never gets a gap.
 void attach(Monitors &mons, int index) {
-    if (index < 0 || index >= mons.size() || mons.size() < 2)
+    if (index < 0 || index >= mons.size() || !mons[index].enabled || enabledCount(mons) < 2)
         return;
     Monitor &m = mons[index];
     const Box r = box(m);
     QList<Box> others;
     for (int i = 0; i < mons.size(); ++i)
-        if (i != index)
+        if (i != index && mons[i].enabled)
             others << box(mons[i]);
     for (const auto &o : others)
         if (touches(r, o) || intersects(r, o))
@@ -219,6 +251,10 @@ void rotate(Monitors &mons, int index, int transform) {
     transform = ((transform % 4) + 4) % 4;
     if (transform == mons[index].transform)
         return;
+    if (!mons[index].enabled) {
+        mons[index].transform = transform;   // off the canvas: nobody to move
+        return;
+    }
 
     const Box b = box(mons[index]);
     QList<QPoint> snapshot;
@@ -242,7 +278,7 @@ void rotate(Monitors &mons, int index, int transform) {
         restore(snapshot);
         if (dw || dh) {
             for (int i = 0; i < mons.size(); ++i) {
-                if (i == index)
+                if (i == index || !mons[i].enabled)
                     continue;
                 const Box r = box(mons[i]);
                 if (r.x >= b.x + b.w && (!rowOnly || sameRow(r)))
@@ -273,13 +309,45 @@ void rotate(Monitors &mons, int index, int transform) {
     normalize(mons);
 }
 
+void setEnabled(Monitors &mons, int index, bool enabled) {
+    if (index < 0 || index >= mons.size() || mons[index].enabled == enabled)
+        return;
+    if (!enabled) {
+        mons[index].enabled = false;
+        normalize(mons);
+        return;
+    }
+    Monitor &m = mons[index];
+    m.enabled = true;
+    if (resolution(m).w <= 0 && !m.modes.isEmpty())
+        m.mode = m.modes.first();
+    fixScale(m);
+    if (enabledCount(mons) == 1) {
+        m.x = m.y = 0;
+        return;
+    }
+    if (overlaps(mons).contains(m.name)) {
+        int right = INT_MIN, top = INT_MAX;
+        for (int i = 0; i < mons.size(); ++i)
+            if (i != index && mons[i].enabled) {
+                const Box b = box(mons[i]);
+                right = std::max(right, int(b.x + b.w));
+                top = std::min(top, int(b.y));
+            }
+        m.x = right;
+        m.y = top;
+    }
+    attach(mons, index);
+    normalize(mons);
+}
+
 // The arrow keys hop to the next place an edge lines up, or 200 px when
 // there is none in that direction.
 int jump(const Monitors &mons, int index, bool horizontal, int direction) {
     const Box r = box(mons[index]);
     QList<Box> others;
     for (int i = 0; i < mons.size(); ++i)
-        if (i != index)
+        if (i != index && mons[i].enabled)
             others << box(mons[i]);
     const double p = horizontal ? r.x : r.y;
     std::optional<int> best;
@@ -301,7 +369,8 @@ static bool isInternal(const QString &name) {
 QList<Preset> presets(const Monitors &mons) {
     QHash<QString, QSize> S;
     for (const auto &m : mons)
-        S.insert(m.name, size(m));
+        if (m.enabled)
+            S.insert(m.name, size(m));
     auto row = [&](const QStringList &names, int bottom, int x0 = 0) {
         QHash<QString, QPoint> out;
         int x = x0;
@@ -321,6 +390,8 @@ QList<Preset> presets(const Monitors &mons) {
     QString laptop;
     QStringList all, externals;
     for (const auto &m : mons) {
+        if (!m.enabled)
+            continue;
         all << m.name;
         if (laptop.isEmpty() && isInternal(m.name))
             laptop = m.name;
@@ -330,7 +401,7 @@ QList<Preset> presets(const Monitors &mons) {
 
     QList<Preset> list;
     list << Preset{"row", tr("In a row"), row(all, tallest(all))};
-    if (mons.size() < 2)
+    if (all.size() < 2)
         return list;
 
     if (!laptop.isEmpty() && !externals.isEmpty()) {
@@ -388,22 +459,35 @@ void applyPreset(Monitors &mons, const Preset &preset) {
     normalize(mons);
 }
 
+QString rule(const Monitors &mons, const Monitor &m) {
+    const QString output = selector(mons, m);
+    if (!m.enabled)
+        return QString(R"(hl.monitor({ output = "%1", disabled = true }))").arg(output);
+    const QString mode = resolution(m).w > 0 ? m.mode : QString("preferred");
+    QString s = QString(R"(hl.monitor({ output = "%1", mode = "%2", position = "%3x%4", scale = %5)")
+                    .arg(output, mode).arg(m.x).arg(m.y).arg(formatScale(m.scale));
+    const int transform = m.transform + (m.flipped ? 4 : 0);
+    if (transform)
+        s += QString(", transform = %1").arg(transform);
+    return s + " })";
+}
+
 QString toLua(const Monitors &mons) {
     QStringList lines{QString(BlockBegin) + " (managed block: edits here are overwritten on Apply)"};
     Monitors sorted = mons;
     std::stable_sort(sorted.begin(), sorted.end(), [](const Monitor &a, const Monitor &b) {
+        if (a.enabled != b.enabled)
+            return a.enabled;
         return a.x != b.x ? a.x < b.x : a.y < b.y;
     });
     for (const auto &m : sorted) {
-        QString s = QString(R"(hl.monitor({ output = "%1", mode = "%2", position = "%3x%4", scale = %5)")
-                        .arg(m.name, m.mode).arg(m.x).arg(m.y).arg(formatScale(m.scale));
-        const int transform = m.transform + (m.flipped ? 4 : 0);
-        if (transform)
-            s += QString(", transform = %1").arg(transform);
-        s += " })";
-        if (m.transform)
-            s += QString("  -- %1, %2 %3").arg(m.label, orientation(m.transform), rotationLabel(m.transform));
-        lines << s;
+        // The connector it has today, for whoever reads the file.
+        QString note = m.name + " · " + m.label;
+        if (!m.enabled)
+            note += ", " + tr("off");
+        else if (m.transform)
+            note += QString(", %1 %2").arg(orientation(m.transform), rotationLabel(m.transform));
+        lines << rule(mons, m) + "  -- " + note;
     }
     lines << "-- Any other monitor you plug in"
           << R"(hl.monitor({ output = "", mode = "preferred", position = "auto", scale = "auto" }))"
@@ -436,6 +520,9 @@ static QString formatHz(double hz) {
     return s;
 }
 
+// The gap between the layout and the displays that load turned off.
+static const int Parking = 400;
+
 static const QStringList Palette{"#7aa2f7", "#bb9af7", "#9ece6a", "#e0af68",
                                  "#7dcfff", "#f7768e", "#ff9e64", "#73daca"};
 
@@ -450,14 +537,13 @@ Monitors fromHyprctl(const QByteArray &json, QString *error) {
     Monitors mons;
     for (const auto &value : doc.array()) {
         const auto o = value.toObject();
-        if (o.value("disabled").toBool())
-            continue;
         const QString mirror = o.value("mirrorOf").toString();
         if (!mirror.isEmpty() && mirror != "none")
             continue;
 
         Monitor m;
         m.name = o.value("name").toString();
+        m.enabled = !o.value("disabled").toBool();
         const QString make = o.value("make").toString().trimmed();
         const QString brand = make.section(' ', 0, 0);
         m.label = isInternal(m.name) ? tr("Laptop") : brand.isEmpty() ? m.name : brand;
@@ -465,6 +551,12 @@ Monitors fromHyprctl(const QByteArray &json, QString *error) {
         const QString model = o.value("model").toString().trimmed();
         m.description = model.startsWith(brand, Qt::CaseInsensitive) ? brand + model.mid(brand.size())
                                                                      : (brand + " " + model).trimmed();
+        m.hyprDescription = o.value("description").toString().trimmed();
+        if (m.hyprDescription.isEmpty()) {
+            QStringList parts{make, model, o.value("serial").toString().trimmed()};
+            parts.removeAll(QString());
+            m.hyprDescription = parts.join(' ');
+        }
         const double mm = std::hypot(o.value("physicalWidth").toDouble(), o.value("physicalHeight").toDouble());
         m.inches = int(std::lround(mm / 25.4));
 
@@ -480,7 +572,10 @@ Monitors fromHyprctl(const QByteArray &json, QString *error) {
         const QString res = QString("%1x%2").arg(o.value("width").toInt()).arg(o.value("height").toInt());
         const double hz = o.value("refreshRate").toDouble();
         m.mode = res + "@" + formatHz(hz);
-        if (!m.modes.contains(m.mode)) {
+        if (o.value("width").toInt() <= 0 || o.value("height").toInt() <= 0) {
+            // A disabled output may have no live mode; take its best one.
+            m.mode = m.modes.isEmpty() ? QString() : m.modes.first();
+        } else if (!m.modes.contains(m.mode)) {
             // Hyprland reports the live rate with more digits than the mode
             // list; take the listed mode that matches it.
             QString close;
@@ -504,8 +599,11 @@ Monitors fromHyprctl(const QByteArray &json, QString *error) {
         mons << m;
     }
 
-    // Numbered left to right, then top to bottom, the way they sit today.
+    // Numbered left to right, then top to bottom, the way they sit today;
+    // the ones turned off come last.
     std::stable_sort(mons.begin(), mons.end(), [](const Monitor &a, const Monitor &b) {
+        if (a.enabled != b.enabled)
+            return a.enabled;
         return a.x != b.x ? a.x < b.x : a.y < b.y;
     });
     for (int i = 0; i < mons.size(); ++i) {
@@ -513,6 +611,19 @@ Monitors fromHyprctl(const QByteArray &json, QString *error) {
         mons[i].color = Palette[i % Palette.size()];
     }
     normalize(mons);
+    // Hyprland doesn't say where a disabled output was, so it would sit
+    // under the others at 0,0. Park the ones that are off in a row to the
+    // right, apart, where they can be seen and turned back on.
+    int right = 0, top = 0;
+    for (const auto &m : mons)
+        if (m.enabled)
+            right = std::max(right, int(box(m).x + box(m).w));
+    for (auto &m : mons)
+        if (!m.enabled) {
+            m.x = right + Parking;
+            m.y = top;
+            right = m.x + size(m).width();
+        }
     return mons;
 }
 

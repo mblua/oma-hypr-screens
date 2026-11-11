@@ -19,7 +19,7 @@ public:
     enum Role {
         NameRole = Qt::UserRole + 1, NumberRole, LabelRole, DescriptionRole, InchesRole, ModeRole,
         ScaleTextRole, TransformRole, XRole, YRole, WidthRole, HeightRole, HzRole, ColorRole,
-        OverlappingRole, DetachedRole, SelectedRole
+        OverlappingRole, DetachedRole, SelectedRole, OnRole
     };
 
     explicit MonitorModel(QObject *parent = nullptr) : QAbstractListModel(parent) {}
@@ -75,7 +75,7 @@ public:
     QString selected() const { return m_selected; }
     QVariantMap current() const;
     bool dirty() const { return m_mons != m_saved; }
-    bool valid() const { return Layout::overlaps(m_mons).isEmpty(); }
+    bool valid() const { return Layout::overlaps(m_mons).isEmpty() && Layout::enabledCount(m_mons) > 0; }
     int portraitCount() const;
     bool pending() const { return m_pending; }
     int countdown() const { return m_countdown; }
@@ -105,6 +105,8 @@ public:
 
     Q_INVOKABLE void rotate(const QString &name);
     Q_INVOKABLE void rotateSelected() { rotate(m_selected); }
+    Q_INVOKABLE void toggle(const QString &name);
+    Q_INVOKABLE void toggleSelected() { toggle(m_selected); }
     Q_INVOKABLE void move(int dx, int dy, bool nudge);
     Q_INVOKABLE void cycleScale();
     Q_INVOKABLE void cycleMode();
@@ -130,11 +132,14 @@ private:
     void loadFromHyprland();
     bool runHyprctl(const QStringList &args, QByteArray *out, QString *error);
     bool reloadHyprland(QString *error);
+    void wake(const Monitors &target);
     void project(const QString &selected, bool force = false);
     void push();
     void changedLayout();
     void say(const QString &text, const QString &kind = {});
     int currentIndex() const { return Layout::indexOf(m_mons, m_selected); }
+    // False, with a hint, when the display is off and so can't be edited.
+    bool editable(int index);
 
     Options m_options;
     Identifier *m_identifier;

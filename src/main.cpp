@@ -20,7 +20,7 @@
 #include "theme.h"
 #include "translator.h"
 
-static const char *Version = "0.1.0";
+static const char *Version = "0.2.0";
 
 static void printUsage(FILE *to) {
     std::fputs("Usage: oma-hypr-screens [open]\n"

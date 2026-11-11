@@ -7,6 +7,7 @@
 #include <QFileInfo>
 #include <QJsonArray>
 #include <QJsonDocument>
+#include <QJsonObject>
 #include <QProcess>
 #include <QSaveFile>
 #include <QStandardPaths>
@@ -40,6 +41,7 @@ QVariant MonitorModel::data(const QModelIndex &index, int role) const {
     case OverlappingRole: return m_overlapping.contains(m.name);
     case DetachedRole: return !m_overlapping.contains(m.name) && m_detached.contains(m.name);
     case SelectedRole: return m.name == m_selected;
+    case OnRole: return m.enabled;
     }
     return {};
 }
@@ -49,7 +51,7 @@ QHash<int, QByteArray> MonitorModel::roleNames() const {
             {InchesRole, "inches"}, {ModeRole, "mode"}, {ScaleTextRole, "scaleText"}, {TransformRole, "quarterTurns"},
             {XRole, "posX"}, {YRole, "posY"}, {WidthRole, "logicalWidth"}, {HeightRole, "logicalHeight"},
             {HzRole, "hz"}, {ColorRole, "monitorColor"}, {OverlappingRole, "overlapping"},
-            {DetachedRole, "detached"}, {SelectedRole, "selected"}};
+            {DetachedRole, "detached"}, {SelectedRole, "selected"}, {OnRole, "on"}};
 }
 
 void MonitorModel::update(const Monitors &mons, const QString &selected) {
@@ -157,7 +159,8 @@ QString Backend::configDisplayPath() const {
     return path;
 }
 
-// The area the displays cover, for the canvas to fit them into view.
+// The area the displays cover, the ones that are off included, for the
+// canvas to fit them into view.
 QRectF Backend::bounds() const {
     QRectF r;
     for (const auto &m : m_mons) {
@@ -176,13 +179,14 @@ QVariantMap Backend::current() const {
     return {{"name", m.name}, {"number", m.id}, {"label", m.label}, {"description", m.description},
             {"inches", m.inches}, {"mode", m.mode}, {"scaleText", Layout::formatScale(m.scale)},
             {"transform", m.transform}, {"posX", m.x}, {"posY", m.y}, {"logicalWidth", s.width()},
-            {"logicalHeight", s.height()}, {"monitorColor", m.color}};
+            {"logicalHeight", s.height()}, {"monitorColor", m.color}, {"on", m.enabled},
+            {"output", Layout::selector(m_mons, m)}};
 }
 
 int Backend::portraitCount() const {
     int n = 0;
     for (const auto &m : m_mons)
-        n += m.transform % 2;
+        n += m.enabled && m.transform % 2;
     return n;
 }
 
@@ -215,7 +219,8 @@ void Backend::project(const QString &selected, bool force) {
     }
     QList<IdentifyTarget> targets;
     for (const auto &m : m_mons)
-        targets << IdentifyTarget{m.name, m.id, m.color, m.label};
+        if (m.enabled)
+            targets << IdentifyTarget{m.name, m.id, m.color, m.label};
     m_identifier->show(targets, selected, 2500);
 }
 
@@ -242,23 +247,50 @@ void Backend::selectNext() {
     select(m_mons[(currentIndex() + 1) % m_mons.size()].name);
 }
 
+bool Backend::editable(int index) {
+    if (index < 0)
+        return false;
+    if (m_mons[index].enabled)
+        return true;
+    say(tr("%1 is off: turn it on (o) to place it.").arg(m_mons[index].name));
+    return false;
+}
+
+void Backend::toggle(const QString &name) {
+    const int i = Layout::indexOf(m_mons, name);
+    if (m_pending || i < 0)
+        return;
+    if (name != m_selected)
+        select(name);
+    const bool on = !m_mons[i].enabled;
+    if (!on && Layout::enabledCount(m_mons) <= 1)
+        return say(tr("%1 is the only display on: it stays on.").arg(name), "err");
+    push();
+    Layout::setEnabled(m_mons, i, on);
+    changedLayout();
+    say(on ? tr("%1 on: it goes back on screen when you apply.").arg(name)
+           : tr("%1 off: Hyprland turns it off when you apply, and its workspaces move to the others.").arg(name));
+}
+
 void Backend::beginDrag(const QString &name) {
     if (m_pending)
         return;
     select(name);
+    if (!editable(Layout::indexOf(m_mons, name)))
+        return;
     push();
 }
 
 void Backend::dragTo(const QString &name, double x, double y, double threshold, bool free) {
     const int i = Layout::indexOf(m_mons, name);
-    if (m_pending || i < 0)
+    if (m_pending || i < 0 || !m_mons[i].enabled)
         return;
     Box r = Layout::box(m_mons[i]);
     r.x = x;
     r.y = y;
     QList<Box> others;
     for (int j = 0; j < m_mons.size(); ++j)
-        if (j != i)
+        if (j != i && m_mons[j].enabled)
             others << Layout::box(m_mons[j]);
     const Snap s = free ? Snap{x, y, {}, {}} : Layout::snap(r, others, threshold);
     m_mons[i].x = int(std::lround(s.x));
@@ -275,7 +307,7 @@ void Backend::dragTo(const QString &name, double x, double y, double threshold, 
 
 void Backend::endDrag(const QString &name, bool moved) {
     const int i = Layout::indexOf(m_mons, name);
-    if (m_pending || i < 0)
+    if (m_pending || i < 0 || !m_mons[i].enabled)
         return;
     m_guidesX.clear();
     m_guidesY.clear();
@@ -299,6 +331,8 @@ void Backend::rotate(const QString &name) {
         return;
     if (name != m_selected)
         select(name);
+    if (!editable(i))
+        return;
     push();
     Layout::rotate(m_mons, i, m_mons[i].transform + 1);
     changedLayout();
@@ -314,7 +348,7 @@ void Backend::rotate(const QString &name) {
 
 void Backend::move(int dx, int dy, bool nudge) {
     const int i = currentIndex();
-    if (m_pending || i < 0 || (!dx && !dy))
+    if (m_pending || i < 0 || (!dx && !dy) || !editable(i))
         return;
     push();
     Monitor &m = m_mons[i];
@@ -333,7 +367,7 @@ void Backend::move(int dx, int dy, bool nudge) {
 
 void Backend::cycleScale() {
     const int i = currentIndex();
-    if (m_pending || i < 0)
+    if (m_pending || i < 0 || !editable(i))
         return;
     push();
     Monitor &m = m_mons[i];
@@ -350,7 +384,7 @@ void Backend::cycleScale() {
 
 void Backend::cycleMode() {
     const int i = currentIndex();
-    if (m_pending || i < 0 || m_mons[i].modes.isEmpty())
+    if (m_pending || i < 0 || m_mons[i].modes.isEmpty() || !editable(i))
         return;
     push();
     Monitor &m = m_mons[i];
@@ -408,7 +442,8 @@ void Backend::redo() {
 // The canvas is a draft. Apply backs monitors.lua up to monitors.lua.bak,
 // rewrites only the managed block (atomically), and reloads Hyprland. Then
 // the user has a few seconds to Keep the result; Revert, or no answer at all
-// (say the picture went black), puts the previous file back.
+// (say the picture went black), puts the previous file back and leaves the
+// draft on the canvas.
 
 static bool writeAtomically(const QString &path, const QString &text, QString *error) {
     QSaveFile file(path);
@@ -437,11 +472,30 @@ bool Backend::reloadHyprland(QString *error) {
     return true;
 }
 
+// A reload doesn't turn a disabled output back on: Hyprland only applies
+// the new rules to the outputs it is driving. Each display that should be on
+// and isn't gets its rule again through `hyprctl eval`, which does.
+void Backend::wake(const Monitors &target) {
+    QByteArray json;
+    QString error;
+    if (!runHyprctl({"monitors", "all", "-j"}, &json, &error))
+        return;
+    QSet<QString> off;
+    for (const auto &v : QJsonDocument::fromJson(json).array())
+        if (v.toObject().value("disabled").toBool())
+            off << v.toObject().value("name").toString();
+    for (const auto &m : target)
+        if (m.enabled && off.contains(m.name))
+            runHyprctl({"eval", Layout::rule(target, m)}, nullptr, &error);
+}
+
 void Backend::apply() {
     if (m_pending)
         return;
     if (!m_error.isEmpty())
         return say(m_error, "err");
+    if (!Layout::enabledCount(m_mons))
+        return say(tr("Can't apply: every display is off."), "err");
     if (!valid())
         return say(tr("Can't apply: some displays overlap."), "err");
     if (!dirty())
@@ -457,7 +511,7 @@ void Backend::apply() {
     if (!writeAtomically(m_options.configPath + ".bak", original, &error))
         return say(tr("Can't write the backup %1.bak: %2").arg(configDisplayPath(), error), "err");
 
-    QStringList outputs;
+    QStringList outputs = Layout::selectors(m_mons);
     for (const auto &m : m_mons)
         outputs << m.name;
     const QString merged = Layout::mergeManagedBlock(original, lua(), outputs);
@@ -468,10 +522,12 @@ void Backend::apply() {
     if (!reloadHyprland(&error)) {
         QString restoreError;
         writeAtomically(m_options.configPath, m_backup, &restoreError);
-        reloadHyprland(&restoreError);
+        if (reloadHyprland(&restoreError))
+            wake(m_saved);
         return say(tr("Hyprland didn't take the new layout (%1). Your previous monitors.lua is back.").arg(error), "err");
     }
 
+    wake(m_mons);
     m_pending = true;
     m_countdown = m_options.confirmSeconds;
     m_tick.start();
@@ -494,13 +550,16 @@ void Backend::revert(bool timedOut) {
     m_pending = false;
     QString error;
     const bool restored = writeAtomically(m_options.configPath, m_backup, &error) && reloadHyprland(&error);
-    push();
-    m_mons = m_saved;
+    if (restored)
+        wake(m_saved);
+    // The screens go back; the canvas keeps the draft that was applied, so
+    // it can be fixed and applied again. Esc once more discards it.
     changedLayout();
     if (!restored)
         return say(tr("Couldn't restore the previous layout (%1). It is in %2.bak.").arg(error, configDisplayPath()), "err");
-    say(timedOut ? tr("No answer in %1 s: restored the previous layout.").arg(m_options.confirmSeconds)
-                 : tr("Reverted to the previous layout."), timedOut ? "err" : "");
+    say(timedOut ? tr("No answer in %1 s: your screens are back as they were. The draft is still here: fix it and apply again, or Esc to discard it.").arg(m_options.confirmSeconds)
+                 : tr("Your screens are back as they were. The draft is still here: fix it and apply again, or Esc to discard it."),
+        timedOut ? "err" : "");
 }
 
 void Backend::discard() {

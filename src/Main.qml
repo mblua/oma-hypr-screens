@@ -119,6 +119,7 @@ ApplicationWindow {
     Shortcut { sequence: "M"; context: Qt.ApplicationShortcut; enabled: !win.modal; onActivated: backend.cycleMode() }
     Shortcut { sequence: "P"; context: Qt.ApplicationShortcut; enabled: !win.modal; onActivated: backend.nextPreset() }
     Shortcut { sequence: "I"; context: Qt.ApplicationShortcut; enabled: !win.modal; onActivated: backend.identify() }
+    Shortcut { sequence: "O"; context: Qt.ApplicationShortcut; enabled: !win.modal; onActivated: backend.toggleSelected() }
     Shortcut { sequences: ["U", "Ctrl+Z"]; context: Qt.ApplicationShortcut; enabled: !win.modal; onActivated: backend.undo() }
     Shortcut { sequences: ["Ctrl+Shift+Z"]; context: Qt.ApplicationShortcut; enabled: !win.modal; onActivated: backend.redo() }
 
@@ -300,6 +301,29 @@ ApplicationWindow {
                                     font.pixelSize: 11
                                     color: win.fgDim
                                     text: qsTr("Each click turns it 90° the same way. 4 clicks = back to start. If the picture comes out upside down after applying, click twice more.")
+                                }
+                                Rectangle {
+                                    readonly property bool on: inspector.m.on !== false
+                                    width: parent.width
+                                    height: 34
+                                    radius: Math.min(4, theme.radius)
+                                    color: power.containsMouse ? win.bgLight : "transparent"
+                                    border.width: 1
+                                    border.color: on ? win.muted : win.green
+                                    Text {
+                                        anchors.centerIn: parent
+                                        text: parent.on ? qsTr("⏻ Turn off (o)") : qsTr("⏻ Turn on (o)")
+                                        color: parent.on ? win.fg : win.green
+                                        font.pixelSize: 13
+                                        font.weight: Font.DemiBold
+                                    }
+                                    MouseArea {
+                                        id: power
+                                        anchors.fill: parent
+                                        hoverEnabled: true
+                                        cursorShape: Qt.PointingHandCursor
+                                        onClicked: backend.toggleSelected()
+                                    }
                                 }
                             }
                         }
@@ -512,7 +536,7 @@ ApplicationWindow {
                             ["1-" + Math.max(1, backend.count), qsTr("select")], ["tab", qsTr("next")],
                             ["←↑↓→", qsTr("jump to next edge")], ["shift+arrow", qsTr("nudge 10px")],
                             ["r", qsTr("rotate 90°")], ["s", qsTr("scale")], ["m", qsTr("resolution")],
-                            ["p", qsTr("preset")], ["i", qsTr("identify")], ["u", qsTr("undo")],
+                            ["p", qsTr("preset")], ["o", qsTr("on/off")], ["i", qsTr("identify")], ["u", qsTr("undo")],
                             ["enter", qsTr("apply")], ["esc", qsTr("revert")], ["?", qsTr("help")]
                         ]
                         Text {
@@ -569,11 +593,12 @@ ApplicationWindow {
                         ["S", qsTr("Next scale")],
                         ["M", qsTr("Next resolution")],
                         ["P", qsTr("Next preset")],
+                        ["O", qsTr("Turn the display off, or back on")],
                         ["I", qsTr("Show every number on the monitors")],
                         ["U / Ctrl + Z", qsTr("Undo")],
                         ["Ctrl + Shift + Z", qsTr("Redo")],
                         ["Enter / Space", qsTr("Apply, then Enter again to keep")],
-                        ["Esc", qsTr("Revert, or discard the changes")],
+                        ["Esc", qsTr("Revert (the draft stays), or discard the changes")],
                         ["Alt + drag", qsTr("Move without snapping")],
                         ["?", qsTr("This help")],
                         ["Q", qsTr("Quit")]

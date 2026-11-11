@@ -19,6 +19,8 @@ struct Monitor {
     QString name;             // Hyprland output, e.g. "DP-2"
     QString label;            // short brand, or "Laptop" for the built-in panel
     QString description;      // brand and model
+    QString hyprDescription;  // Hyprland's full description, serial included, for desc: rules
+    bool enabled = true;      // false: written as disabled = true, kept off the canvas
     int inches = 0;
     QStringList modes;        // "2560x1440@59.95", best first, as Hyprland lists them
     QString mode;
@@ -29,7 +31,7 @@ struct Monitor {
     QString color;
 
     bool operator==(const Monitor &o) const {
-        return name == o.name && mode == o.mode && qAbs(scale - o.scale) < 1e-6 && transform == o.transform
+        return name == o.name && enabled == o.enabled && mode == o.mode && qAbs(scale - o.scale) < 1e-6 && transform == o.transform
             && flipped == o.flipped && x == o.x && y == o.y;
     }
     bool operator!=(const Monitor &o) const { return !(*this == o); }
@@ -76,6 +78,18 @@ QString rotationLabel(int transform);
 QString orientation(int transform);
 
 int indexOf(const Monitors &mons, const QString &name);
+int enabledCount(const Monitors &mons);
+
+// What a rule names the display by. Connector names (DP-2, DP-3…) can swap
+// between boots when monitors hang off a dock or a USB-C hub, so a display
+// is named by its description (make, model and serial) whenever that is
+// unique; the connector is the fallback for twins without a serial.
+QString selector(const Monitors &mons, const Monitor &m);
+QStringList selectors(const Monitors &mons);
+
+// Turns a display on or off. Turning one on puts it back where it was if
+// that spot is free, otherwise to the right of the others.
+void setEnabled(Monitors &mons, int index, bool enabled);
 QSet<QString> overlaps(const Monitors &mons);
 QSet<QString> isolated(const Monitors &mons);
 void normalize(Monitors &mons);
@@ -89,16 +103,20 @@ int jump(const Monitors &mons, int index, bool horizontal, int direction);
 QList<Preset> presets(const Monitors &mons);
 void applyPreset(Monitors &mons, const Preset &preset);
 
+// One display's hl.monitor(...) line, without the trailing comment; also
+// what `hyprctl eval` gets to wake a display a reload left off.
+QString rule(const Monitors &mons, const Monitor &m);
 QString toLua(const Monitors &mons);
 QString luaHtml(const QString &lua);
 
-// Parses `hyprctl monitors all -j`; disabled and mirrored outputs are left
-// out because they have no place on the canvas.
+// Parses `hyprctl monitors all -j`. Mirrored outputs are left out because
+// they have no place on the canvas; disabled ones come last, turned off.
 Monitors fromHyprctl(const QByteArray &json, QString *error = nullptr);
 
 // Puts the managed block into monitors.lua and keeps everything else. A
 // first run comments out the catch-all rule and any rule for an output the
-// block now owns, so the file says one thing per monitor.
+// block now owns (by connector or by desc:), so the file says one thing per
+// monitor.
 QString mergeManagedBlock(const QString &file, const QString &block, const QStringList &outputs);
 
 extern const char *const BlockBegin;

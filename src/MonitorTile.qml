@@ -1,7 +1,9 @@
 import QtQuick
 
 // One display on the canvas. The face (name, numbers, the "▲ top" strip)
-// turns with the monitor's rotation; the Rotate button stays upright.
+// turns with the monitor's rotation; the Rotate and power buttons stay
+// upright. A display that is off stays where it was, grayed out and below
+// the others, with only the power button and selection working.
 Rectangle {
     id: tile
     required property string name
@@ -18,6 +20,7 @@ Rectangle {
     required property string monitorColor
     required property bool overlapping
     required property bool selected
+    required property bool on
 
     property Item canvas
     property real k: 0.05
@@ -36,17 +39,24 @@ Rectangle {
         return Qt.rgba(q.r, q.g, q.b, a)
     }
 
+    readonly property color gray: "#414868"
+    readonly property color green: "#9ece6a"
+    // The color everything on the face uses: gray when the display is off.
+    readonly property color hue: on ? monitorColor : gray
+
     x: ox + posX * k
     y: oy + posY * k
     width: logicalWidth * k
     height: logicalHeight * k
-    z: dragging ? 5 : selected ? 2 : 1
+    z: dragging ? 5 : !on ? 0 : selected ? 2 : 1
     clip: true
     radius: Math.min(4, theme.radius)
-    color: overlapping ? Qt.tint("#13141c", tile.fade(red, 0.15))
+    color: !on ? (selected ? "#1a1b26" : "#101118")
+         : overlapping ? Qt.tint("#13141c", tile.fade(red, 0.15))
          : selected ? Qt.tint("#13141c", tile.fade(monitorColor, 0.10)) : "#13141c"
     border.width: selected ? 2 : 1
-    border.color: overlapping ? red : selected ? monitorColor : "#414868"
+    border.color: !on ? (selected ? "#565f89" : "#2a2e42")
+                : overlapping ? red : selected ? monitorColor : "#414868"
 
     Behavior on x { enabled: !tile.dragging; NumberAnimation { duration: 200; easing.type: Easing.OutCubic } }
     Behavior on y { enabled: !tile.dragging; NumberAnimation { duration: 200; easing.type: Easing.OutCubic } }
@@ -67,13 +77,18 @@ Rectangle {
         id: drag
         anchors.fill: parent
         preventStealing: true
-        cursorShape: tile.dragging ? Qt.ClosedHandCursor : Qt.OpenHandCursor
+        cursorShape: !tile.on ? Qt.PointingHandCursor : tile.dragging ? Qt.ClosedHandCursor : Qt.OpenHandCursor
         property point start
         property int startX
         property int startY
         property bool moved: false
 
         onPressed: mouse => {
+            if (!tile.on) {
+                // Off: a click selects it; there is nothing to drag.
+                backend.select(tile.name)
+                return
+            }
             start = mapToItem(tile.canvas, mouse.x, mouse.y)
             startX = tile.posX
             startY = tile.posY
@@ -117,12 +132,12 @@ Rectangle {
             id: topStrip
             anchors { left: parent.left; right: parent.right; top: parent.top }
             height: 5
-            color: tile.monitorColor
+            color: tile.hue
         }
         Text {
             anchors { top: topStrip.bottom; topMargin: 1; horizontalCenter: parent.horizontalCenter }
-            text: qsTr("▲ top")
-            color: tile.monitorColor
+            text: tile.on ? qsTr("▲ top") : qsTr("off")
+            color: tile.hue
             font.pixelSize: 10
             font.letterSpacing: 0.5
         }
@@ -130,7 +145,7 @@ Rectangle {
         Text {
             anchors.centerIn: parent
             text: tile.number
-            color: tile.monitorColor
+            color: tile.hue
             font.pixelSize: Math.max(8, Math.round(Math.min(face.width * 0.5, face.height * 0.75)))
             font.weight: Font.ExtraBold
             opacity: tile.identifying ? 1 : tile.selected ? 0.4 : 0.22
@@ -144,8 +159,8 @@ Rectangle {
             Behavior on opacity { NumberAnimation { duration: 200 } }
 
             Text {
-                text: "[" + tile.number + "] " + tile.name
-                color: tile.monitorColor
+                text: "[" + tile.number + "] " + tile.name + (tile.on ? "" : "  " + qsTr("○ off"))
+                color: tile.on ? tile.monitorColor : tile.dim
                 font.pixelSize: 13
                 font.weight: Font.Bold
             }
@@ -160,12 +175,13 @@ Rectangle {
                 font.pixelSize: 11
             }
             Text {
+                visible: tile.on
                 text: tile.posX + "," + tile.posY
                 color: tile.dim
                 font.pixelSize: 11
             }
             Rectangle {
-                visible: tile.quarterTurns !== 0
+                visible: tile.on && tile.quarterTurns !== 0
                 width: badge.implicitWidth + 10
                 height: badge.implicitHeight
                 color: tile.orange
@@ -193,6 +209,7 @@ Rectangle {
         color: hover.containsMouse ? Qt.tint("#24283b", tile.fade(tile.orange, 0.12)) : "#24283b"
         border.width: 1
         border.color: tile.orange
+        visible: tile.on
         opacity: tile.identifying ? 0 : 1
         Behavior on opacity { NumberAnimation { duration: 200 } }
 
@@ -234,6 +251,55 @@ Rectangle {
             hoverEnabled: true
             cursorShape: Qt.PointingHandCursor
             onClicked: backend.rotate(tile.name)
+        }
+    }
+
+    // On/off, beside Rotate: one click turns the display off (it grays out
+    // and stays here) or back on. Applied like any other change.
+    Rectangle {
+        id: powerButton
+        anchors {
+            right: tile.on ? rotateButton.left : parent.right
+            rightMargin: tile.on ? 6 : 8
+            bottom: parent.bottom
+            bottomMargin: 8
+        }
+        height: 38
+        width: Math.max(38, powerRow.implicitWidth + 20)
+        radius: Math.min(4, theme.radius)
+        readonly property color ink: tile.on ? tile.ink : tile.green
+        color: powerHover.containsMouse ? Qt.tint("#24283b", tile.fade(ink, 0.12)) : "#24283b"
+        border.width: 1
+        border.color: ink
+        opacity: tile.identifying ? 0 : 1
+        Behavior on opacity { NumberAnimation { duration: 200 } }
+
+        Row {
+            id: powerRow
+            anchors.centerIn: parent
+            spacing: 6
+            Text {
+                anchors.verticalCenter: parent.verticalCenter
+                text: "⏻"
+                color: powerButton.ink
+                font.pixelSize: 18
+            }
+            Text {
+                anchors.verticalCenter: parent.verticalCenter
+                visible: tile.width > 230 && tile.height > 120
+                text: tile.on ? qsTr("Off") : qsTr("Turn on")
+                color: powerButton.ink
+                font.pixelSize: 12
+                font.weight: Font.DemiBold
+            }
+        }
+
+        MouseArea {
+            id: powerHover
+            anchors.fill: parent
+            hoverEnabled: true
+            cursorShape: Qt.PointingHandCursor
+            onClicked: backend.toggle(tile.name)
         }
     }
 }

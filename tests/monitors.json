@@ -1,16 +1,16 @@
 [
- {"id":0,"name":"eDP-2","make":"Samsung Display Corp.","model":"ATNA60HU01-0","physicalWidth":350,"physicalHeight":220,
+ {"id":0,"name":"eDP-2","description":"Samsung Display Corp. ATNA60HU01-0","make":"Samsung Display Corp.","model":"ATNA60HU01-0","physicalWidth":350,"physicalHeight":220,
   "width":2560,"height":1600,"refreshRate":240.0,"x":0,"y":0,"scale":1.6,"transform":0,"disabled":false,"mirrorOf":"none",
   "availableModes":["2560x1600@240.00Hz","2560x1600@60.00Hz"]},
- {"id":1,"name":"HDMI-A-1","make":"ViewSonic Corporation","model":"VX3218C-QHD","physicalWidth":700,"physicalHeight":390,
+ {"id":1,"name":"HDMI-A-1","description":"ViewSonic Corporation VX3218C-QHD X1J242920849","make":"ViewSonic Corporation","model":"VX3218C-QHD","physicalWidth":700,"physicalHeight":390,
   "width":2560,"height":1440,"refreshRate":59.951,"x":6080,"y":0,"scale":1.0,"transform":0,"disabled":false,"mirrorOf":"none",
   "availableModes":["2560x1440@59.95Hz","3840x2160@59.94Hz","2560x1440@144.00Hz","1920x1080@60.00Hz"]},
- {"id":2,"name":"DP-2","make":"ViewSonic Corporation","model":"VX3218C-QHD","physicalWidth":700,"physicalHeight":390,
+ {"id":2,"name":"DP-2","description":"ViewSonic Corporation VX3218C-QHD X1J252340452","make":"ViewSonic Corporation","model":"VX3218C-QHD","physicalWidth":700,"physicalHeight":390,
   "width":2560,"height":1440,"refreshRate":59.951,"x":1600,"y":0,"scale":1.0,"transform":0,"disabled":false,"mirrorOf":"none",
   "availableModes":["2560x1440@59.95Hz","3840x2160@60.00Hz","1920x1080@60.00Hz"]},
- {"id":3,"name":"DP-3","make":"Dell Inc.","model":"DELL P2422HE","physicalWidth":530,"physicalHeight":300,
+ {"id":3,"name":"DP-3","description":"Dell Inc. DELL P2422HE 2Z7LYB3","make":"Dell Inc.","model":"DELL P2422HE","physicalWidth":530,"physicalHeight":300,
   "width":1920,"height":1080,"refreshRate":60.0,"x":4160,"y":0,"scale":1.0,"transform":0,"disabled":false,"mirrorOf":"none",
   "availableModes":["1920x1080@60.00Hz","1600x900@60.00Hz","1280x720@60.00Hz"]},
- {"id":4,"name":"DP-9","make":"Nobody","model":"Off","width":1920,"height":1080,"refreshRate":60.0,"x":0,"y":0,
+ {"id":4,"name":"DP-9","description":"Nobody Off","make":"Nobody","model":"Off","width":1920,"height":1080,"refreshRate":60.0,"x":0,"y":0,
   "scale":1.0,"transform":0,"disabled":true,"mirrorOf":"none","availableModes":[]}
 ]

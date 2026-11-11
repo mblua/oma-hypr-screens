@@ -4,4 +4,16 @@ set -eu
 ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 "$ROOT/bin/build"
 cd "$ROOT/pkgbuild"
-exec makepkg -fsi "$@"
+makepkg -f "$@"
+
+# The package just built, by absolute path: pkexec doesn't keep the working
+# directory. The -debug package is left out.
+PKG="$(makepkg --packagelist | grep -v -- '-debug-' | head -n 1)"
+
+# sudo asks for the password in a terminal; without one (an agent, a
+# launcher, the `!` prefix in Claude Code) pkexec asks in a dialog instead.
+if [ -t 0 ]; then
+    exec sudo pacman -U --noconfirm "$PKG"
+else
+    exec pkexec pacman -U --noconfirm "$PKG"
+fi

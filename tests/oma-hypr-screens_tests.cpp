@@ -56,15 +56,19 @@ private:
     }
 
     // A hyprctl stand-in: answers from files in the directory and logs calls.
+    // monitors.json starts as the fixture; a test rewrites it to change what
+    // Hyprland reports.
     static QString fakeHyprctl(const QTemporaryDir &dir) {
         const QString script = dir.filePath("hyprctl");
         write(dir.filePath("configerrors.json"), "[\"\"]");
+        QFile::copy(QString(FIXTURES) + "/monitors.json", dir.filePath("monitors.json"));
         write(script, "#!/bin/sh\n"
                       "echo \"$*\" >> '" + dir.filePath("calls").toUtf8() + "'\n"
                       "case \"$1\" in\n"
-                      "  monitors) cat '" + QByteArray(FIXTURES) + "/monitors.json' ;;\n"
+                      "  monitors) cat '" + dir.filePath("monitors.json").toUtf8() + "' ;;\n"
                       "  configerrors) cat '" + dir.filePath("configerrors.json").toUtf8() + "' ;;\n"
                       "  reload) echo ok ;;\n"
+                      "  eval) echo ok ;;\n"
                       "esac\n");
         QFile::setPermissions(script, QFile::ReadOwner | QFile::WriteOwner | QFile::ExeOwner);
         return script;
@@ -75,7 +79,7 @@ private slots:
 
     void parsesHyprctl() {
         const Monitors mons = fixture();
-        QCOMPARE(mons.size(), 4);   // the disabled output is left out
+        QCOMPARE(mons.size(), 5);   // the disabled output comes last, off
         QCOMPARE(mons[0].name, QString("eDP-2"));
         QCOMPARE(mons[0].label, QString("Laptop"));
         QCOMPARE(mons[0].mode, QString("2560x1600@240"));
@@ -87,6 +91,11 @@ private slots:
         QCOMPARE(mons[3].id, 4);
         QCOMPARE(mons[3].x, 6080);
         QCOMPARE(mons[1].inches, 32);
+        QCOMPARE(mons[2].hyprDescription, QString("Dell Inc. DELL P2422HE 2Z7LYB3"));
+        QCOMPARE(mons[4].name, QString("DP-9"));
+        QVERIFY(!mons[4].enabled);
+        QCOMPARE(mons[4].id, 5);
+        QVERIFY(mons[0].enabled);
         checkClean(mons);
     }
 
@@ -192,6 +201,86 @@ private slots:
         }
     }
 
+    // ── Naming displays ─────────────────────────────────────────────────────
+
+    // Connectors can swap between boots (a dock or a USB-C hub decides the
+    // order). The rules must still point at the same physical displays.
+    void rulesSurviveSwappedConnectors() {
+        Monitors mons = fixture();
+        Layout::rotate(mons, 2, 3);
+        auto rules = [](const Monitors &list) {
+            QStringList out;
+            for (const auto &line : Layout::toLua(list).split('\n'))
+                out << line.section("  -- ", 0, 0);
+            return out;
+        };
+        const QStringList before = rules(mons);
+        Monitors swapped = mons;
+        swapped[1].name = "DP-5";
+        swapped[2].name = "DP-4";
+        QCOMPARE(rules(swapped), before);
+    }
+
+    void twinsWithoutSerialFallBackToConnectors() {
+        Monitors mons = fixture();
+        mons[1].hyprDescription = mons[3].hyprDescription = "ViewSonic Corporation VX3218C-QHD";
+        QCOMPARE(Layout::selector(mons, mons[1]), QString("DP-2"));
+        QCOMPARE(Layout::selector(mons, mons[3]), QString("HDMI-A-1"));
+        QCOMPARE(Layout::selector(mons, mons[2]), QString("desc:Dell Inc. DELL P2422HE 2Z7LYB3"));
+        mons[0].hyprDescription.clear();
+        QCOMPARE(Layout::selector(mons, mons[0]), QString("eDP-2"));
+    }
+
+    void mergeSetsAsideRulesByDescription() {
+        const Monitors mons = fixture();
+        QStringList outputs = Layout::selectors(mons);
+        for (const auto &m : mons)
+            outputs << m.name;
+        const QString file = QString::fromUtf8(StockConfig)
+            + "hl.monitor({ output = \"desc:Dell Inc. DELL P2422HE 2Z7LYB3\", mode = \"preferred\", position = \"auto\", scale = 1 })\n";
+        const QString merged = Layout::mergeManagedBlock(file, Layout::toLua(mons), outputs);
+        QVERIFY(merged.contains("-- (replaced by oma-hypr-screens) hl.monitor({ output = \"desc:Dell Inc."));
+    }
+
+    // ── Turning displays off ────────────────────────────────────────────────
+
+    void offDisplaysLeaveTheGeometry() {
+        Monitors mons = fixture();
+        // DP-9 is off, parked apart to the right: no overlap, not detached.
+        checkClean(mons);
+        int right = 0;
+        for (int i = 0; i < 4; ++i)
+            right = std::max(right, mons[i].x + Layout::size(mons[i]).width());
+        QVERIFY(mons[4].x > right);
+        Layout::setEnabled(mons, 3, false);   // HDMI-A-1, the rightmost
+        QVERIFY(!mons[3].enabled);
+        checkClean(mons);
+        QCOMPARE(Layout::presets(mons).first().positions.size(), 3);
+        const QString lua = Layout::toLua(mons);
+        QVERIFY(lua.contains("hl.monitor({ output = \"desc:ViewSonic Corporation VX3218C-QHD X1J242920849\", disabled = true })"));
+        // Rotating it off the canvas moves nobody.
+        const Monitors before = mons;
+        Layout::rotate(mons, 3, 1);
+        QCOMPARE(mons[3].transform, 1);
+        for (int i = 0; i < 3; ++i)
+            QCOMPARE(QPoint(mons[i].x, mons[i].y), QPoint(before[i].x, before[i].y));
+    }
+
+    void turningOnFindsAFreeSpot() {
+        Monitors mons = fixture();
+        const QPoint where(mons[3].x, mons[3].y);
+        Layout::setEnabled(mons, 3, false);
+        Layout::setEnabled(mons, 3, true);
+        QCOMPARE(QPoint(mons[3].x, mons[3].y), where);   // its old place was free
+        checkClean(mons);
+
+        // DP-9 was never placed: it lands beside the others, with a real mode.
+        Layout::setEnabled(mons, 4, true);
+        QVERIFY(mons[4].enabled);
+        checkClean(mons);
+        QVERIFY(Layout::toLua(mons).contains("output = \"desc:Nobody Off\", mode = \"1920x1080@60\""));
+    }
+
     // ── monitors.lua ────────────────────────────────────────────────────────
 
     void writesLua() {
@@ -200,8 +289,11 @@ private slots:
         const QString lua = Layout::toLua(mons);
         QVERIFY(lua.startsWith(Layout::BlockBegin));
         QVERIFY(lua.endsWith(Layout::BlockEnd));
-        QVERIFY(lua.contains("hl.monitor({ output = \"eDP-2\", mode = \"2560x1600@240\", position = \"0x"));
-        QVERIFY(lua.contains(", transform = 1 })  -- ViewSonic, vertical 90°"));
+        QVERIFY(lua.contains("hl.monitor({ output = \"desc:Samsung Display Corp. ATNA60HU01-0\", mode = \"2560x1600@240\", position = \"0x"));
+        QVERIFY(lua.contains("output = \"desc:ViewSonic Corporation VX3218C-QHD X1J252340452\""));
+        QVERIFY(lua.contains(", transform = 1 })  -- DP-2 · ViewSonic, vertical 90°"));
+        QVERIFY(lua.contains("hl.monitor({ output = \"desc:Nobody Off\", disabled = true })  -- DP-9 · Nobody, off"));
+        QVERIFY(!lua.contains("output = \"DP-"));
         QVERIFY(lua.contains("hl.monitor({ output = \"\", mode = \"preferred\", position = \"auto\", scale = \"auto\" })"));
     }
 
@@ -272,7 +364,7 @@ private slots:
         write(dir.filePath("monitors.lua"), StockConfig);
         FakeIdentifier identifier;
         Backend backend({fakeHyprctl(dir), dir.filePath("monitors.lua"), 10}, &identifier);
-        QCOMPARE(backend.count(), 4);
+        QCOMPARE(backend.count(), 5);
         QVERIFY(backend.error().isEmpty());
         QVERIFY(!backend.dirty());
 
@@ -292,6 +384,93 @@ private slots:
         QCOMPARE(backend.current().value("transform").toInt(), 1);
         backend.discard();
         QVERIFY(!backend.dirty());
+    }
+
+    void backendTogglesDisplays() {
+        QTemporaryDir dir;
+        write(dir.filePath("monitors.lua"), StockConfig);
+        FakeIdentifier identifier;
+        Backend backend({fakeHyprctl(dir), dir.filePath("monitors.lua"), 10}, &identifier);
+        backend.selectNumber(3);
+        QCOMPARE(backend.selected(), QString("DP-3"));
+        backend.toggleSelected();
+        QVERIFY(backend.dirty());
+        QCOMPARE(backend.current().value("on").toBool(), false);
+        QVERIFY(backend.lua().contains("desc:Dell Inc. DELL P2422HE 2Z7LYB3\", disabled = true"));
+
+        // Off, it can't be moved or rotated.
+        const QVariantMap before = backend.current();
+        backend.rotateSelected();
+        backend.move(1, 0, false);
+        QCOMPARE(backend.current(), before);
+
+        backend.identify();
+        QCOMPARE(identifier.shown, 3);
+
+        backend.undo();
+        QVERIFY(!backend.dirty());
+
+        // The last display that is on stays on.
+        for (const QString name : {"eDP-2", "DP-2", "DP-3"})
+            backend.toggle(name);
+        QVERIFY(backend.valid());
+        backend.toggle("HDMI-A-1");
+        QCOMPARE(backend.layout()[Layout::indexOf(backend.layout(), "HDMI-A-1")].enabled, true);
+        QCOMPARE(backend.statusKind(), QString("err"));
+    }
+
+    // Hyprland's reload leaves a disabled output off even when the restored
+    // file wants it on; revert turns it back on through hyprctl eval.
+    void revertWakesWhatWasTurnedOff() {
+        QTemporaryDir dir;
+        const QString config = dir.filePath("monitors.lua");
+        write(config, StockConfig);
+        Backend backend({fakeHyprctl(dir), config, 10});
+        backend.toggle("DP-3");
+        backend.apply();
+        QVERIFY(backend.pending());
+        QVERIFY(read(config).contains("desc:Dell Inc. DELL P2422HE 2Z7LYB3\", disabled = true"));
+        QVERIFY(!read(dir.filePath("calls")).contains("eval"));
+
+        // Hyprland now has DP-3 off.
+        QByteArray json = read(dir.filePath("monitors.json")).toUtf8();
+        const int at = json.indexOf("\"name\":\"DP-3\"");
+        json.replace(json.indexOf("\"disabled\":false", at), 16, "\"disabled\":true");
+        write(dir.filePath("monitors.json"), json);
+
+        backend.revert();
+        QCOMPARE(read(config), QString::fromUtf8(StockConfig));
+        QVERIFY2(read(dir.filePath("calls")).contains(
+                     "eval hl.monitor({ output = \"desc:Dell Inc. DELL P2422HE 2Z7LYB3\", mode = \"1920x1080@60\""),
+                 qPrintable(read(dir.filePath("calls"))));
+        // The draft, with DP-3 off, stays on the canvas.
+        QVERIFY(!backend.layout()[Layout::indexOf(backend.layout(), "DP-3")].enabled);
+    }
+
+    // The same when the change is turning one on: the reload alone won't.
+    void applyWakesWhatIsTurnedOn() {
+        QTemporaryDir dir;
+        const QString config = dir.filePath("monitors.lua");
+        write(config, StockConfig);
+        Backend backend({fakeHyprctl(dir), config, 10});
+        backend.toggle("DP-9");
+        QVERIFY(backend.valid());
+        backend.apply();
+        QVERIFY(backend.pending());
+        QVERIFY(read(dir.filePath("calls")).contains("eval hl.monitor({ output = \"desc:Nobody Off\", mode = "));
+    }
+
+    void offDisplaysDontDrag() {
+        QTemporaryDir dir;
+        write(dir.filePath("monitors.lua"), StockConfig);
+        Backend backend({fakeHyprctl(dir), dir.filePath("monitors.lua"), 10});
+        const Monitor before = backend.layout()[4];
+        backend.beginDrag("DP-9");
+        backend.dragTo("DP-9", 0, 0, 1, true);
+        backend.endDrag("DP-9", true);
+        QCOMPARE(backend.layout()[4].x, before.x);
+        QCOMPARE(backend.selected(), QString("DP-9"));
+        QVERIFY(!backend.canUndo());
     }
 
     void backendDragSnapsAndAttaches() {
@@ -340,10 +519,15 @@ private slots:
         backend.revert();
         QVERIFY(!backend.pending());
         QCOMPARE(read(config), QString::fromUtf8(StockConfig));
-        QVERIFY(!backend.dirty());
-        // The rotation is one undo away.
-        backend.undo();
+        // The canvas keeps the draft that was applied, rotation included.
         QVERIFY(backend.dirty());
+        QCOMPARE(backend.layout()[Layout::indexOf(backend.layout(), "DP-2")].transform, 1);
+        // It can be applied again, or discarded.
+        backend.apply();
+        QVERIFY(backend.pending());
+        backend.revert();
+        backend.discard();
+        QVERIFY(!backend.dirty());
     }
 
     void noAnswerReverts() {
@@ -357,6 +541,7 @@ private slots:
         QTRY_VERIFY_WITH_TIMEOUT(!backend.pending(), 3000);
         QCOMPARE(read(config), QString::fromUtf8(StockConfig));
         QCOMPARE(backend.statusKind(), QString("err"));
+        QCOMPARE(backend.layout()[Layout::indexOf(backend.layout(), "DP-3")].transform, 1);
     }
 
     void configErrorsRestoreRightAway() {

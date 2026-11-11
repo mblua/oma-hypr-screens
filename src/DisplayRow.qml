@@ -17,6 +17,7 @@ Rectangle {
     required property bool overlapping
     required property bool detached
     required property bool selected
+    required property bool on
 
     width: parent ? parent.width : 0
     height: content.implicitHeight + 12
@@ -41,6 +42,7 @@ Rectangle {
 
     Column {
         id: content
+        opacity: row.on ? 1 : 0.55
         anchors { left: key.right; leftMargin: 6; right: shape.left; rightMargin: 6 }
         y: 6
 
@@ -51,7 +53,8 @@ Rectangle {
             color: "#c0caf5"
             font.pixelSize: 13
             text: row.name + " · " + row.label
-                  + (row.overlapping ? "  <font color='#f7768e'>" + qsTr("✗ overlaps") + "</font>"
+                  + (!row.on ? "  <font color='#565f89'>" + qsTr("○ off") + "</font>"
+                     : row.overlapping ? "  <font color='#f7768e'>" + qsTr("✗ overlaps") + "</font>"
                      : row.detached ? "  <font color='#e0af68'>" + qsTr("· detached") + "</font>" : "")
         }
         Text {
@@ -79,6 +82,7 @@ Rectangle {
     Rectangle {
         id: shape
         anchors { right: parent.right; rightMargin: 14; top: parent.top; topMargin: 10 }
+        opacity: row.on ? 1 : 0.3
         width: row.quarterTurns % 2 ? 16 : 26
         height: row.quarterTurns % 2 ? 26 : 16
         color: Qt.rgba(Qt.color(row.monitorColor).r, Qt.color(row.monitorColor).g, Qt.color(row.monitorColor).b, 0.15)
